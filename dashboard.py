@@ -211,7 +211,7 @@ while True:
                     showlegend=False,
                     height=300
                 )
-                st.plotly_chart(fig_risk, use_container_width=True)
+                st.plotly_chart(fig_risk, use_container_width=True, key="risk_distribution_chart")
             
             with chart_col2:
                 st.subheader("📈 Event Types")
@@ -227,7 +227,7 @@ while True:
                     font_color='#00FF00',
                     height=300
                 )
-                st.plotly_chart(fig_events, use_container_width=True)
+                st.plotly_chart(fig_events, use_container_width=True, key="event_types_pie_chart")
 
             st.markdown("---")
             
@@ -277,7 +277,7 @@ while True:
                     font_color='#00FF00',
                     height=300
                 )
-                st.plotly_chart(fig_timeline, use_container_width=True)
+                st.plotly_chart(fig_timeline, use_container_width=True, key="threat_timeline_chart")
 
         else:
             st.info("🟢 System Ready - Waiting for events...")

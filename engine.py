@@ -8,19 +8,30 @@ import os
 import socket
 from datetime import datetime
 
-# --- KONFIGURASI ---
+# ==============================================================================
+# KONFIGURASI SYSTEM
+# ==============================================================================
 ADB_PATH = r"C:\Users\pyjyu\AppData\Local\Android\Sdk\platform-tools\adb.exe"
 DB_FILE = "locshield.db"
 
-# Setting Wireshark - FIXED: Gunakan 0.0.0.0 agar bisa capture
-WIRESHARK_IP = "127.0.0.1"  # Target localhost
+# Setting Wireshark
+WIRESHARK_IP = "127.0.0.1"
 WIRESHARK_PORT = 9999
-WIRESHARK_BIND_IP = "0.0.0.0"  # Bind ke semua interface
+WIRESHARK_BIND_IP = "0.0.0.0"
 
-# Socket UDP untuk kirim ke Wireshark
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-# --- DATABASE ---
+# Daftar Aplikasi Cheat untuk dicek
+FAKE_KEYWORDS = [
+    "com.lexa.fakegps",             
+    "com.theappninjas.gpsjoystick", 
+    "com.fly.gps",
+    "com.incorporateapps.fakegps"
+]
+
+# ==============================================================================
+# DATABASE
+# ==============================================================================
 def init_db():
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -36,13 +47,12 @@ def init_db():
     except Exception as e:
         print(f"[DB ERROR] {e}")
 
-# --- KIRIM KE WIRESHARK (FIXED) ---
+# ==============================================================================
+# NETWORK & LOGGING
+# ==============================================================================
 def send_to_wireshark(status, app_name, details, risk=0):
     try:
-        # Format payload dengan delimiter yang jelas untuk Wireshark
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        
-        # Payload JSON agar mudah di-parse di Wireshark
         payload = {
             "timestamp": timestamp,
             "status": status,
@@ -50,62 +60,42 @@ def send_to_wireshark(status, app_name, details, risk=0):
             "risk": risk,
             "details": details
         }
-        
-        # Kirim sebagai JSON string
         msg = json.dumps(payload)
-        
-        # Kirim paket UDP
         sock.sendto(msg.encode('utf-8'), (WIRESHARK_IP, WIRESHARK_PORT))
         
-        # Debug print dengan warna
-        color = "\033[96m"  # Cyan untuk network
-        print(f"{color}[NETWORK] UDP → {WIRESHARK_IP}:{WIRESHARK_PORT} | {status[:30]}\033[0m")
-        
+        color = "\033[96m"
+        print(f"{color}[NETWORK] UDP -> {WIRESHARK_IP}:{WIRESHARK_PORT} | {status[:30]}\033[0m")
     except Exception as e:
-        print(f"\033[91m[NETWORK ERROR] {e}\033[0m")
+        pass
 
-# --- CALCULATE DREAD SCORE ---
 def calculate_dread(event_type):
-    """
-    DREAD Scoring untuk setiap tipe event
-    D = Damage potential (1-10)
-    R = Reproducibility (1-10)
-    E = Exploitability (1-10)
-    A = Affected users (1-10)
-    D = Discoverability (1-10)
-    """
     dread_matrix = {
         "FAKE GPS DETECTED": {"D": 8, "R": 9, "E": 7, "A": 8, "Disc": 6},
         "USER USED FAKE GPS TO MAPS": {"D": 10, "R": 10, "E": 8, "A": 9, "Disc": 7},
         "ATTACKED": {"D": 9, "R": 10, "E": 9, "A": 7, "Disc": 8},
-        "HIGH_FREQ_ACCESS": {"D": 7, "R": 10, "E": 8, "A": 6, "Disc": 9},
         "AMAN": {"D": 1, "R": 1, "E": 1, "A": 1, "Disc": 1},
     }
     
-    scores = dread_matrix.get(event_type, {"D": 5, "R": 5, "E": 5, "A": 5, "Disc": 5})
-    total = sum(scores.values())
-    return total, scores
+    if "THREAT" in event_type or "ATTACK" in event_type:
+        scores = dread_matrix["ATTACKED"]
+    else:
+        scores = dread_matrix.get(event_type, {"D": 5, "R": 5, "E": 5, "A": 5, "Disc": 5})
+    return sum(scores.values()), scores
 
-# --- LOG EVENT (FIXED) ---
 def log_event(status, source, risk, msg):
     ts = datetime.now().strftime("%H:%M:%S")
-    
-    # Hitung DREAD score
     dread_total, dread_detail = calculate_dread(status)
     
-    # Warna Terminal
-    color = "\033[97m"  # White default
+    color = "\033[97m"  # White
     if status == "AMAN": 
-        color = "\033[92m"  # Green
-    elif "FAKE GPS DETECTED" in status: 
-        color = "\033[93m"  # Yellow
-    elif "USER USED FAKE" in status or status == "ATTACKED" or "HIGH_FREQ" in msg: 
-        color = "\033[91m"  # Red
+        color = "\033[92m"  # Hijau
+    elif "FAKE GPS" in status: 
+        color = "\033[93m"  # Kuning
+    elif "ATTACK" in status or "THREAT" in status or risk >= 7: 
+        color = "\033[91m"  # Merah
     
-    # Print dengan DREAD score
     print(f"{color}[{ts}] {status} | {source} | Risk:{risk} | DREAD:{dread_total}/50 | {msg}\033[0m")
     
-    # Simpan ke Database dengan DREAD
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
@@ -114,161 +104,139 @@ def log_event(status, source, risk, msg):
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"[DB ERROR] {e}")
+        pass
 
-    # Kirim ke Wireshark dengan detail lengkap
-    details_full = f"{msg} | DREAD:{dread_total} | D:{dread_detail.get('D',0)} R:{dread_detail.get('R',0)} E:{dread_detail.get('E',0)} A:{dread_detail.get('A',0)} Disc:{dread_detail.get('Disc',0)}"
+    details_full = f"{msg} | DREAD:{dread_total}"
     send_to_wireshark(status, source, details_full, risk)
 
-# --- ENGINE UTAMA (FIXED) ---
+# ==============================================================================
+# HELPER: CEK PROSES AKTIF (AUTO-VERIFY)
+# ==============================================================================
+def check_is_process_running():
+    """
+    Fungsi ini melakukan double-check ke sistem Android.
+    Mengembalikan True jika aplikasi Fake GPS masih jalan.
+    """
+    try:
+        # ps -A mengambil semua proses yang jalan
+        cmd = [ADB_PATH, 'shell', 'ps', '-A']
+        # timeout 1 detik biar tidak bikin lag
+        output = subprocess.run(cmd, capture_output=True, text=True, errors='ignore', timeout=1.0).stdout.lower()
+        
+        for app in FAKE_KEYWORDS:
+            if app in output:
+                return True # MASIH JALAN!
+        return False # SUDAH MATI
+    except:
+        return False
+
+# ==============================================================================
+# ENGINE UTAMA
+# ==============================================================================
 def start_engine():
-    # Validasi ADB
     if not os.path.exists(ADB_PATH):
         print(f"\033[91m[ERROR] ADB tidak ditemukan di {ADB_PATH}\033[0m")
-        print("Download dari: https://developer.android.com/studio/releases/platform-tools")
         return
     
-    # Check ADB connection
     try:
-        result = subprocess.run([ADB_PATH, 'devices'], capture_output=True, text=True)
-        if "device" not in result.stdout:
-            print("\033[91m[ERROR] Tidak ada device terkoneksi!\033[0m")
-            print("Jalankan: adb connect <IP_EMULATOR>")
-            return
-    except Exception as e:
-        print(f"\033[91m[ERROR] ADB check failed: {e}\033[0m")
-        return
+        subprocess.run([ADB_PATH, 'devices'], capture_output=True)
+    except:
+        pass
 
     init_db()
     
     print("\033[92m" + "="*70)
-    print("🔥 LOCSHIELD TURBO ENGINE - FORENSIC MODE ACTIVATED 🔥")
+    print("🔥 LOCSHIELD TURBO ENGINE - AUTO VERIFY MODE ACTIVATED 🔥")
     print("="*70 + "\033[0m")
-    print(f"[NETWORK] Wireshark Target: {WIRESHARK_IP}:{WIRESHARK_PORT}")
-    print(f"[NETWORK] Bind Interface: {WIRESHARK_BIND_IP}")
-    print(f"[INFO] Untuk capture Wireshark:")
-    print(f"       1. Buka Wireshark → Capture → Options")
-    print(f"       2. Pilih interface 'Loopback' atau 'Adapter for loopback'")
-    print(f"       3. Filter: udp.port == {WIRESHARK_PORT}")
-    print(f"       4. Start Capture")
-    print("\033[92m" + "="*70 + "\033[0m\n")
+    print(f"[INFO] System will auto-verify if Fake GPS is killed.")
     
-    # Start logcat
-    cmd = [ADB_PATH, 'logcat', '-v', 'threadtime', '-T', '1']
+    # --- VARIABEL STATE ---
+    IS_FAKE_GPS_ACTIVE = False 
+    last_verify_time = 0 
+
+    # 1. STARTUP SCAN
+    print("[ENGINE] Startup Scan...")
+    if check_is_process_running():
+        IS_FAKE_GPS_ACTIVE = True
+        log_event("FAKE GPS DETECTED", "Startup Scan", 9, "Cheat App Found Running in Background!")
+    else:
+        print("[INFO] Clean startup. No cheats found.")
+
+    # 2. MONITORING
+    subprocess.run([ADB_PATH, 'logcat', '-c']) 
+    
+    cmd = [ADB_PATH, 'logcat', '-v', 'threadtime']
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
                                text=True, encoding='utf-8', errors='ignore', bufsize=1)
 
-    last_fake_pulse = 0
-    last_gps_access = {}
-    FAKE_KEYWORDS = ["fake", "mock", "lexa", "gpsjoystick", "flygps", "fakegps"]
-    
-    # Counter untuk metrik
-    access_count = {}
-    start_time = time.time()
-
-    print("[ENGINE] Monitoring started... Press Ctrl+C to stop\n")
+    print("[ENGINE] Monitoring started... (Realtime)\n")
 
     try:
         while True:
             line = process.stdout.readline()
             if not line: 
-                time.sleep(0.1)
-                continue
+                continue 
                 
             line_lower = line.lower()
             now = time.time()
 
-            # 1. DETEKSI FAKE GPS (SPOOFING THREAT - STRIDE: S)
+            # --- A. DETEKSI LOG FAKE GPS ---
+            # Jika log muncul, pasti aktif
             if any(keyword in line_lower for keyword in FAKE_KEYWORDS):
-                last_fake_pulse = now
                 if any(x in line_lower for x in ["start", "service", "provider", "enabled"]):
-                    log_event("FAKE GPS DETECTED", "System/Mock Provider", 9, 
-                             "Mock Location Provider Active - STRIDE: Spoofing")
+                    if not IS_FAKE_GPS_ACTIVE:
+                        log_event("FAKE GPS DETECTED", "System Monitor", 9, "Mock Location ACTIVATED")
+                    IS_FAKE_GPS_ACTIVE = True
 
-            # 2. DETEKSI GOOGLE MAPS (HIGH-VALUE TARGET)
-            elif "com.google.android.apps.maps" in line_lower:
-                if any(x in line_lower for x in ["location", "gps", "latitude", "longitude"]):
-                    delta = now - last_fake_pulse
-                    
-                    # Update counter
-                    app = "Google Maps"
-                    access_count[app] = access_count.get(app, 0) + 1
-                    
-                    if delta < 15.0:  # Window 15 detik
-                        log_event("USER USED FAKE GPS TO MAPS", app, 10, 
-                                 f"SPOOFING ATTACK! Mock trace found {delta:.1f}s ago | Total Access: {access_count[app]}")
-                    else:
-                        # Rate limiting check
-                        if app not in last_gps_access:
-                            last_gps_access[app] = []
-                        
-                        last_gps_access[app].append(now)
-                        # Keep only last 10 minutes
-                        last_gps_access[app] = [t for t in last_gps_access[app] if now - t < 600]
-                        
-                        rate = len(last_gps_access[app])
-                        if rate > 50:  # Lebih dari 50 akses dalam 10 menit
-                            log_event("HIGH_FREQ_ACCESS", app, 7, 
-                                     f"Excessive GPS access detected: {rate} times in 10 min | STRIDE: DoS")
-                        else:
-                            log_event("AMAN", app, 1, 
-                                     f"Real GPS Access Verified | Rate: {rate}/10min")
-
-            # 3. APLIKASI KITA (LocShield Agent)
+            # --- B. TOMBOL ATTACK ---
             elif "LOCSHIELD_BRIDGE" in line:
                 try:
-                    json_part = line.split("LOCSHIELD_BRIDGE:")[1].strip()
-                    # Clean any ANSI codes or extra characters
-                    json_part = re.sub(r'\x1b\[[0-9;]*m', '', json_part)
-                    
-                    data = json.loads(json_part)
-                    event_type = data.get('event', 'UNKNOWN')
-                    
-                    if data['risk'] >= 8:
-                        status = "ATTACKED" if "THREAT" in event_type else "HIGH_RISK_EVENT"
-                    elif data['risk'] >= 5:
-                        status = "AUDIT"
-                    else:
-                        status = "INFO"
-                    
-                    log_event(status, data.get('source', 'LocShield'), 
-                             data.get('risk', 0), data.get('msg', 'No message'))
-                except json.JSONDecodeError as e:
-                    print(f"\033[93m[JSON ERROR] Failed to parse: {e}\033[0m")
-                except Exception as e:
-                    print(f"\033[93m[PARSE ERROR] {e}\033[0m")
+                    json_start = line.find('{')
+                    if json_start != -1:
+                        json_str = line[json_start:].strip()
+                        json_str = re.sub(r'\x1b\[[0-9;]*m', '', json_str)
+                        data = json.loads(json_str)
+                        risk = data.get('risk', 0)
+                        event = data.get('event', '')
+                        
+                        if risk >= 8 or "THREAT" in event:
+                            status = "ATTACKED"
+                        elif "AUDIT" in event:
+                            status = "AUDIT"
+                        else:
+                            status = "INFO"
+                        
+                        log_event(status, data.get('source', 'LocShield'), risk, data.get('msg', ''))
+                except:
+                    pass
 
-            # 4. DETEKSI APLIKASI LAIN YANG AKSES LOKASI
-            elif "ACCESS_FINE_LOCATION" in line or "ACCESS_COARSE_LOCATION" in line:
-                # Extract package name
-                pkg_match = re.search(r'([a-z][a-z0-9_]*(\.[a-z0-9_]+)+)', line_lower)
-                if pkg_match:
-                    pkg = pkg_match.group(1)
-                    if pkg not in ["com.google.android.gms", "com.android.systemui"]:
-                        access_count[pkg] = access_count.get(pkg, 0) + 1
-                        log_event("THIRD_PARTY_ACCESS", pkg, 5, 
-                                 f"Location permission used | Total: {access_count[pkg]}")
+            # --- C. GOOGLE MAPS (DENGAN AUTO-VERIFY) ---
+            elif "com.google.android.apps.maps" in line_lower:
+                if any(x in line_lower for x in ["location", "gps", "latitude", "longitude"]):
+                    
+                    # LOGIC BARU: Jika status ACTIVE, kita cek ulang benarkah masih jalan?
+                    # Kita throttle cek ulang tiap 2 detik biar ga berat
+                    if IS_FAKE_GPS_ACTIVE and (now - last_verify_time > 2.0):
+                        is_still_running = check_is_process_running()
+                        last_verify_time = now
+                        
+                        if not is_still_running:
+                            # TAHU-TAHU MATI? Reset status!
+                            IS_FAKE_GPS_ACTIVE = False
+                            log_event("INFO", "System Monitor", 1, "Fake GPS Process Disappeared (Normalized)")
+
+                    # LOGGING BERDASARKAN HASIL VERIFIKASI
+                    if IS_FAKE_GPS_ACTIVE:
+                        log_event("USER USED FAKE GPS TO MAPS", "Google Maps", 10, 
+                                 "SPOOFING ATTACK! Accessing Maps while FakeGPS Process is RUNNING")
+                    else:
+                        log_event("AMAN", "Google Maps", 1, "Real GPS Access Verified (System Clean)")
 
     except KeyboardInterrupt:
-        print("\n\033[92m[ENGINE] Shutting down gracefully...\033[0m")
-        
-        # Print summary
-        elapsed = time.time() - start_time
-        print(f"\n{'='*70}")
-        print(f"SESSION SUMMARY ({elapsed/60:.1f} minutes)")
-        print(f"{'='*70}")
-        for app, count in access_count.items():
-            print(f"  {app}: {count} accesses")
-        print(f"{'='*70}\n")
-        
+        print("\n\033[92m[ENGINE] Shutting down...\033[0m")
     finally:
         process.terminate()
         sock.close()
 
 if __name__ == "__main__":
-    try: 
-        start_engine()
-    except Exception as e:
-        print(f"\033[91m[FATAL ERROR] {e}\033[0m")
-        import traceback
-        traceback.print_exc()
+    start_engine()
