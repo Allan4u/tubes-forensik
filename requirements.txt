@@ -1,0 +1,16 @@
+# LocShield Turbo - Python Dependencies
+# Install: pip install -r requirements.txt
+
+# Core dependencies
+streamlit==1.29.0
+pandas==2.1.4
+plotly==5.18.0
+
+# Optional: For advanced analysis
+matplotlib==3.8.2
+seaborn==0.13.0
+numpy==1.26.2
+
+# Note: sqlite3 is built-in Python module, no need to install
+# Note: pyshark requires Wireshark/tshark to be installed first
+# Note: jupyter/notebook only needed if you want to do analysis in notebooks
